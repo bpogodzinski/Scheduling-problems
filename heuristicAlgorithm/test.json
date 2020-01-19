@@ -41,5 +41,9 @@
       "2": 8
     }
   },
-  "tau": 30
+  "maintenanceLength":10,
+  "maintenancePeriod": 30,
+  "neighbourSearchCount":10,
+  "algorithmRetries":3,
+  "operationRenewPunishmentFactor":0.2
 }

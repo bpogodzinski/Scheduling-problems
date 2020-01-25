@@ -7,11 +7,16 @@
 #include <list>
 #include <cstdlib>
 #include <fstream>
+#include <optional>
 
 using Json = nlohmann::json;
 
+struct ProblemInstance;
+
 namespace utils
 {
+    ProblemInstance *settings;
+
     enum MachineNumber
     {
         MACHINE1,
@@ -25,11 +30,39 @@ namespace utils
     };
 }
 
+struct Task
+{
+    unsigned int taskNumber = 0;
+    unsigned int machine1OperationLength = 0;
+    unsigned int machine2OperationLength = 0;
+    std::map<utils::MachineNumber, unsigned int> machineLengthMap = { {utils::MACHINE1, machine1OperationLength}, {utils::MACHINE2, machine2OperationLength} };
+
+    Task(const unsigned int taskNumber, const unsigned int machine1OperationLength, const unsigned int machine2OperationLength)
+    :taskNumber(taskNumber), machine1OperationLength(machine1OperationLength), machine2OperationLength(machine2OperationLength) {}
+};
+
+struct ProblemInstance
+{
+    unsigned int maintenanceLength;
+    unsigned int maintenancePeriod;
+    unsigned int neighbourSearchCount;
+    unsigned int algorithmRetries;
+    float operationRenewPunishmentFactor;
+    std::vector<Task> tasks;
+
+    ProblemInstance(unsigned int maintenanceLength, unsigned int maintenancePeriod, unsigned int neighbourSearchCount, unsigned int algorithmRetries, float operationRenewPunishmentFactor, const std::vector<Task> &tasks)
+    :maintenanceLength(maintenanceLength), maintenancePeriod(maintenancePeriod), neighbourSearchCount(neighbourSearchCount), algorithmRetries(algorithmRetries), tasks(tasks)
+    {
+        assert( 0 < operationRenewPunishmentFactor && operationRenewPunishmentFactor < 1 );
+        this->operationRenewPunishmentFactor = operationRenewPunishmentFactor;
+    }
+};
+
 struct MachineBlock
 {
     unsigned int start = 0;
-    unsigned int end = 0;
     unsigned int length = 0;
+    unsigned int end = 0;
     unsigned int taskNumber = 0;
     utils::MachineNumber machineNumber;    
     utils::BlockType blockType;
@@ -58,77 +91,84 @@ struct Solution
     {
         assert(candidate.blockType == utils::OPERATION);
 
-        utils::MachineNumber machineToSearch = (candidate.machineNumber == utils::MACHINE1) ? utils::MACHINE2 : utils::MACHINE1;
-        auto itCorrespondingOperation = std::find_if(machineMap[machineToSearch]->begin(), machineMap[machineToSearch]->end(),[&](MachineBlock &x){ return x.taskNumber == candidate.taskNumber; });
-        if(itCorrespondingOperation != machineMap[machineToSearch]->end())
+        utils::MachineNumber machineNumberToSearch = (candidate.machineNumber == utils::MACHINE1) ? utils::MACHINE2 : utils::MACHINE1;
+        auto machineToSearch = machineMap[machineNumberToSearch];
+
+        auto itCorrespondingOperation = std::find_if(machineToSearch->begin(), machineToSearch->end(),[&](MachineBlock &x){ return x.taskNumber == candidate.taskNumber; });
+        if(itCorrespondingOperation != machineToSearch->end())
         {
             unsigned int candidateStartTime = (machineMap[candidate.machineNumber]->empty()) ? 0 : machineMap[candidate.machineNumber]->back().end;
-            return areBlocksColliding(candidate.length, candidateStartTime, *itCorrespondingOperation) ? false : true;
+            MachineBlock tempMB = {candidateStartTime, candidate.length};
+            return !areBlocksColliding(tempMB, *itCorrespondingOperation);
         }
         else return true;
     }
 
-    bool areBlocksColliding(unsigned int candidateLength, unsigned int candidateStartTime, const MachineBlock &correspondingOperation)
+    bool areBlocksColliding(const MachineBlock &operation, const MachineBlock &correspondingOperation)
     {
-        if(candidateStartTime > correspondingOperation.start){
-            return (candidateStartTime - correspondingOperation.start) >= correspondingOperation.length;
-        }
-        else if(correspondingOperation.start > candidateStartTime){
-            return (correspondingOperation.start - candidateStartTime) >= candidateLength;
-        }
-        else return true;
+        auto compareStartTime = [](MachineBlock x, MachineBlock y){ return x.start < y.start; };
+        auto furtherOperationStartTime = std::max(operation, correspondingOperation, compareStartTime).start;
+        auto closerOperationStartTime = std::min(operation, correspondingOperation, compareStartTime).start;
+        auto closerOperationLength = std::min(operation, correspondingOperation, compareStartTime).length;
+        return !(furtherOperationStartTime - closerOperationStartTime >= closerOperationLength);
     }
 
-    //TODO! : finish both functions
     void addBlockToMachine(MachineBlock &candidate)
     {
+        auto machine = machineMap[candidate.machineNumber];
+
         if (doesOperationFitBeforeMaintenance(candidate))
         {
-            machineMap[candidate.machineNumber]->push_back(candidate);
+            if(machine->empty())
+            {
+                candidate.start = 0;
+                candidate.end = candidate.length;
+                machine->push_back(candidate);
+            }
+            else
+            {
+                candidate.start = machine->back().end;
+                candidate.end = candidate.start + candidate.length;
+                machine->push_back(candidate);
+            }
         }
         else
         {
-            
+             MachineBlock maintenance;
+             maintenance.blockType = utils::MAINTENANCE;
+             maintenance.start = machine->back().end;
+             maintenance.length = utils::settings->maintenanceLength;
+             maintenance.end = maintenance.start + maintenance.length;
+             maintenance.machineNumber = candidate.machineNumber;
+
+             machine->push_back(maintenance);
+             return addBlockToMachine(candidate);
         }
     }
 
-    MachineBlock* getLastMachineBlock(const utils::MachineNumber &machine, const utils::BlockType &block)
+    bool doesOperationFitBeforeMaintenance(MachineBlock &candidate)
+    {
+        return getTimeToNextMaintenance(candidate.machineNumber) >= candidate.length;
+    }
+
+    unsigned int getTimeToNextMaintenance(utils::MachineNumber &machineNumber)
+    {
+        auto machine = machineMap[machineNumber];
+        auto lastMaintenance = getLastMachineBlock(machineNumber, utils::MAINTENANCE);
+        auto lastOperation = getLastMachineBlock(machineNumber, utils::OPERATION);
+        unsigned int lastMaintenanceEndTime = lastMaintenance.has_value() ? lastMaintenance.value()->end : 0;
+        unsigned int lastOperationEndTime = lastOperation.has_value() ? lastOperation.value()->end : 0;
+
+        return utils::settings->maintenancePeriod - abs(lastOperationEndTime - lastMaintenanceEndTime);
+    }
+
+    std::optional<MachineBlock*> getLastMachineBlock(const utils::MachineNumber &machine, const utils::BlockType &block)
     {
         auto it = std::find_if(machineMap[machine]->rbegin(), machineMap[machine]->rend(), [&](MachineBlock &x){ return x.blockType == block;});
         if (it != machineMap[machine]->rend())
-            return &(*it);
+            return std::optional<MachineBlock*>(&(*it));
         else
-            return nullptr;
-    }
-};
-
-struct Task
-{
-    unsigned int taskNumber = 0;
-    unsigned int machine1OperationLength = 0;
-    unsigned int machine2OperationLength = 0;
-    std::map<utils::MachineNumber, unsigned int> machineLengthMap = { {utils::MACHINE1, machine1OperationLength}, {utils::MACHINE2, machine2OperationLength} };
-
-    Task(const unsigned int taskNumber, const unsigned int machine1OperationLength, const unsigned int machine2OperationLength)
-    :taskNumber(taskNumber), machine1OperationLength(machine1OperationLength), machine2OperationLength(machine2OperationLength) {}
-};
-
-struct ProblemInstance
-{
-    unsigned int maintenanceLength;
-    unsigned int maintenancePeriod;
-    unsigned int neighbourSearchCount;
-    unsigned int algorithmRetries;
-    float operationRenewPunishmentFactor;
-    std::vector<Task> tasks;
-
-    ProblemInstance(unsigned int maintenanceLength, unsigned int maintenancePeriod, unsigned int neighbourSearchCount, unsigned int algorithmRetries, float operationRenewPunishmentFactor, const std::vector<Task> &tasks)
-    :maintenanceLength(maintenanceLength), maintenancePeriod(maintenancePeriod), neighbourSearchCount(neighbourSearchCount), algorithmRetries(algorithmRetries), tasks(tasks)
-    {
-        if ( 0 < operationRenewPunishmentFactor && operationRenewPunishmentFactor < 1 )
-            this->operationRenewPunishmentFactor = operationRenewPunishmentFactor;
-        else
-            throw std::logic_error("Punishment factor not between 0 < x < 1");
+            return std::nullopt;
     }
 };
 
@@ -205,9 +245,9 @@ int main(int argc, char const *argv[])
     const char* filepath = argv[1];
 
     ProblemInstance settings = loadProblemInstance(filepath);
+    utils::settings = &settings;
     TabuSearch algorithm(settings);
     algorithm.createInitialSolution();
-
 
     return 0;
 }

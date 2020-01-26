@@ -8,6 +8,7 @@
 #include <cstdlib>
 #include <fstream>
 #include <optional>
+#include <iostream>
 
 using Json = nlohmann::json;
 
@@ -47,6 +48,8 @@ struct ProblemInstance
     unsigned int maintenancePeriod;
     unsigned int neighbourSearchCount;
     unsigned int algorithmRetries;
+    unsigned int candidateListSize = 5;
+    unsigned int tabuListSize = 4;
     float operationRenewPunishmentFactor;
     std::vector<Task> tasks;
 
@@ -67,7 +70,12 @@ struct MachineBlock
     utils::MachineNumber machineNumber;    
     utils::BlockType blockType;
     
+    friend bool operator == (const MachineBlock& x, const MachineBlock& y)
+    {
+        return x.start == y.start && x.length == y.length && x.end == y.end && x.taskNumber == y.taskNumber && x.machineNumber == y.machineNumber && x.blockType == y.blockType;
+    }
 };
+
 
 struct Solution
 {
@@ -85,6 +93,15 @@ struct Solution
         }
 
         return *this;        
+    }
+
+    Solution& orderedSolution(std::list<MachineBlock> blocks)
+    {
+        while(!blocks.empty)
+        {
+            MachineBlock candidate = blocks.front();
+            blocks.pop_front();
+        }
     }
 
     bool isBlockValidToPutOnMachine(const MachineBlock &candidate)
@@ -115,6 +132,8 @@ struct Solution
 
     void addBlockToMachine(MachineBlock &candidate)
     {
+        assert(candidate.blockType == utils::OPERATION);
+
         auto machine = machineMap[candidate.machineNumber];
 
         if (doesOperationFitBeforeMaintenance(candidate))
@@ -162,6 +181,13 @@ struct Solution
         return utils::settings->maintenancePeriod - abs(lastOperationEndTime - lastMaintenanceEndTime);
     }
 
+    unsigned int getCmax()
+    {
+        auto compareEndTime = [](const MachineBlock* x, const MachineBlock* y){ return x->end < y->end; };
+        auto lastOperation = std::max(getLastMachineBlock(utils::MACHINE1, utils::OPERATION).value(),getLastMachineBlock(utils::MACHINE1, utils::OPERATION).value(),compareEndTime);
+        return lastOperation->end;
+    }
+
     std::optional<MachineBlock*> getLastMachineBlock(const utils::MachineNumber &machine, const utils::BlockType &block)
     {
         auto it = std::find_if(machineMap[machine]->rbegin(), machineMap[machine]->rend(), [&](MachineBlock &x){ return x.blockType == block;});
@@ -172,29 +198,30 @@ struct Solution
     }
 };
 
+bool operator== (std::pair<MachineBlock, MachineBlock>& x, std::pair<MachineBlock, MachineBlock>& y)
+{
+    auto b1 = x.first == y.first || x.first == y.second;
+    auto b2 = x.second == y.first || x.second == y.second;
+    return b1 && b2;
+}
+
 class TabuSearch
 {
 private:
     std::random_device rd;
     std::mt19937 randomGenerator;
-
     ProblemInstance* settings;
+    
+public:
     Solution bestSolution;
     Solution currentSolution;
-
-public:
     TabuSearch(ProblemInstance &settings):settings(&settings), randomGenerator(rd()){}
-
-    ProblemInstance getSettings()
-    {
-        return *this->settings;
-    }
 
     std::list<MachineBlock> createRandomOrder()
     {   
         unsigned int numberOfMachines = 2;
         std::vector<MachineBlock> tmpVector;
-        tmpVector.reserve(settings->tasks.size() * numberOfMachines);
+        // tmpVector.reserve(settings->tasks.size() * numberOfMachines);
         for (auto &&task : settings->tasks)
         {
             MachineBlock block1, block2;
@@ -216,11 +243,81 @@ public:
         return machineBlockList;
     }
 
+    std::list<MachineBlock> getBlocksOrder(Solution &solution)
+    {
+        std::vector<MachineBlock> tmpVector;
+        tmpVector.insert(tmpVector.end(), solution.machine1.begin(), solution.machine1.end());
+        tmpVector.insert(tmpVector.end(), solution.machine2.begin(), solution.machine2.end());
+        std::list<MachineBlock> blocks(tmpVector.begin(), tmpVector.end());
+
+        blocks.remove_if([](MachineBlock x){return x.blockType == utils::MAINTENANCE;});
+        std::for_each(blocks.begin(), blocks.end(), [](MachineBlock &x){ x.start = 0; x.end = 0;});
+        return blocks;
+    }
+
     TabuSearch& createInitialSolution()
     {
         std::list<MachineBlock> blocks = this->createRandomOrder();
         currentSolution.randomSolution(blocks);
         return *this;
+    }
+
+    std::vector<std::pair<MachineBlock, MachineBlock>> generateCandidatesForSwap(std::list<MachineBlock> &blocks)
+    {
+        unsigned int candidatesCount = utils::settings->neighbourSearchCount;
+        std::vector<std::pair<MachineBlock, MachineBlock>> swapCandidates;
+        swapCandidates.reserve(candidatesCount);
+
+        do
+        {
+            std::pair<MachineBlock, MachineBlock> swap = getRandomSwap(blocks);
+            if(isSwapCandidateInSwapList(swap, swapCandidates)) continue;
+            else swapCandidates.push_back(swap);
+        }
+        while (swapCandidates.size() != candidatesCount);
+
+        return swapCandidates;
+    }
+
+    std::pair<MachineBlock, MachineBlock> getRandomSwap(const std::list<MachineBlock> &blocks)
+    {
+        std::vector<MachineBlock> tempVector(blocks.begin(), blocks.end());
+        std::shuffle(tempVector.begin(), tempVector.end(), randomGenerator);
+        MachineBlock first = tempVector.back();
+        tempVector.pop_back();
+        auto it = std::find_if(tempVector.begin(), tempVector.end(), [&](MachineBlock &x){ return x.machineNumber == first.machineNumber;});
+        assert(it != tempVector.end());
+        MachineBlock second = *it;
+        return std::make_pair(first, second);
+    }
+
+    bool isSwapCandidateInSwapList(std::pair<MachineBlock, MachineBlock> swap,const std::vector<std::pair<MachineBlock, MachineBlock>> &swapList)
+    {
+        return std::any_of(swapList.begin(), swapList.end(), [&](std::pair<MachineBlock, MachineBlock> x){ return x == swap;});
+    }
+
+    std::list<MachineBlock> swap(std::pair<MachineBlock, MachineBlock> &pair, std::list<MachineBlock> list)
+    {
+        auto it1 = std::find(list.begin(), list.end(), pair.first);
+        auto it2 = std::find(list.begin(), list.end(), pair.second);
+        assert(it1 != list.end() && it2 != list.end());
+        std::swap(*it1, *it2);
+        return list;
+    }
+
+    void optimize()
+    {
+        std::list<MachineBlock> blocks = getBlocksOrder(currentSolution);
+        auto swapList = generateCandidatesForSwap(blocks);
+        for (auto &&pair : swapList)
+        {
+            auto swappedOrder = swap(pair, blocks);
+            Solution solution;
+            solution.orderedSolution(swappedOrder);
+        }
+        
+
+        
     }
 
 };
@@ -248,6 +345,7 @@ int main(int argc, char const *argv[])
     utils::settings = &settings;
     TabuSearch algorithm(settings);
     algorithm.createInitialSolution();
+    algorithm.optimize();
 
     return 0;
 }

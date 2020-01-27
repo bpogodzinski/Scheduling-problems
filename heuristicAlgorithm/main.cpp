@@ -101,6 +101,7 @@ struct Solution
         {
             MachineBlock candidate = blocks.front();
             blocks.pop_front();
+            addOrderedBlockToMachine(candidate);
         }
     }
 
@@ -108,17 +109,27 @@ struct Solution
     {
         assert(candidate.blockType == utils::OPERATION);
 
-        utils::MachineNumber machineNumberToSearch = (candidate.machineNumber == utils::MACHINE1) ? utils::MACHINE2 : utils::MACHINE1;
-        auto machineToSearch = machineMap[machineNumberToSearch];
-
-        auto itCorrespondingOperation = std::find_if(machineToSearch->begin(), machineToSearch->end(),[&](MachineBlock &x){ return x.taskNumber == candidate.taskNumber; });
-        if(itCorrespondingOperation != machineToSearch->end())
+        auto correspondingOperation = findCorrespondingOperation(candidate);
+        if(correspondingOperation.has_value())
         {
             unsigned int candidateStartTime = (machineMap[candidate.machineNumber]->empty()) ? 0 : machineMap[candidate.machineNumber]->back().end;
             MachineBlock tempMB = {candidateStartTime, candidate.length};
-            return !areBlocksColliding(tempMB, *itCorrespondingOperation);
+            return !areBlocksColliding(tempMB, *correspondingOperation.value());
         }
         else return true;
+    }
+
+    std::optional<MachineBlock*> findCorrespondingOperation(const MachineBlock &operation)
+    {
+        assert(operation.blockType == utils::OPERATION);
+
+        utils::MachineNumber machineNumberToSearch = (operation.machineNumber == utils::MACHINE1) ? utils::MACHINE2 : utils::MACHINE1;
+        auto machineToSearch = machineMap[machineNumberToSearch];
+
+        auto itCorrespondingOperation = std::find_if(machineToSearch->begin(), machineToSearch->end(),[&](MachineBlock &x){ return x.taskNumber == operation.taskNumber; });
+        if(itCorrespondingOperation != machineToSearch->end())
+            return std::optional<MachineBlock*>(&(*itCorrespondingOperation));
+        else return std::nullopt;
     }
 
     bool areBlocksColliding(const MachineBlock &operation, const MachineBlock &correspondingOperation)
@@ -162,6 +173,50 @@ struct Solution
 
              machine->push_back(maintenance);
              return addBlockToMachine(candidate);
+        }
+    }
+
+    void addOrderedBlockToMachine(MachineBlock &candidate)
+    {
+        assert(candidate.blockType == utils::OPERATION);
+
+        auto machine = machineMap[candidate.machineNumber];
+
+        if (doesOperationFitBeforeMaintenance(candidate))
+        {
+            if(isBlockValidToPutOnMachine(candidate))
+            {
+                if(machine->empty())
+                {
+                    candidate.start = 0;
+                    candidate.end = candidate.length;
+                    machine->push_back(candidate);
+                }
+                else
+                {
+                    candidate.start = machine->back().end;
+                    candidate.end = candidate.start + candidate.length;
+                    machine->push_back(candidate);
+                }
+            }
+            else
+            {
+                auto correspondingOperation = findCorrespondingOperation(candidate).value();
+                //TODO TABU: push operation after colliding one or move the colliding one? 
+                
+            }
+        }
+        else
+        {
+             MachineBlock maintenance;
+             maintenance.blockType = utils::MAINTENANCE;
+             maintenance.start = machine->back().end;
+             maintenance.length = utils::settings->maintenanceLength;
+             maintenance.end = maintenance.start + maintenance.length;
+             maintenance.machineNumber = candidate.machineNumber;
+
+             machine->push_back(maintenance);
+             return addOrderedBlockToMachine(candidate);
         }
     }
 

@@ -76,7 +76,6 @@ struct MachineBlock
     }
 };
 
-
 struct Solution
 {
     std::vector<MachineBlock> machine1;
@@ -97,12 +96,13 @@ struct Solution
 
     Solution& orderedSolution(std::list<MachineBlock> blocks)
     {
-        while(!blocks.empty)
+        while(!blocks.empty())
         {
             MachineBlock candidate = blocks.front();
             blocks.pop_front();
             addOrderedBlockToMachine(candidate);
         }
+        return *this;
     }
 
     bool isBlockValidToPutOnMachine(const MachineBlock &candidate)
@@ -202,7 +202,25 @@ struct Solution
             else
             {
                 auto correspondingOperation = findCorrespondingOperation(candidate).value();
-                //TODO TABU: push operation after colliding one or move the colliding one? 
+                MachineBlock tempMB = {correspondingOperation->end, candidate.length, correspondingOperation->end + candidate.length, candidate.taskNumber, candidate.machineNumber, candidate.blockType}; 
+                if(doesOperationFitBeforeMaintenance(tempMB))
+                {
+                    candidate.start = correspondingOperation->end;
+                    candidate.end = candidate.length + candidate.start;
+                    machine->push_back(candidate);
+                }
+                else
+                {
+                    MachineBlock maintenance;
+                    maintenance.blockType = utils::MAINTENANCE;
+                    maintenance.start = machine->back().end;
+                    maintenance.length = utils::settings->maintenanceLength;
+                    maintenance.end = maintenance.start + maintenance.length;
+                    maintenance.machineNumber = candidate.machineNumber;
+
+                    machine->push_back(maintenance);
+                    return addOrderedBlockToMachine(candidate);
+                }
                 
             }
         }
@@ -239,18 +257,30 @@ struct Solution
     unsigned int getCmax()
     {
         auto compareEndTime = [](const MachineBlock* x, const MachineBlock* y){ return x->end < y->end; };
-        auto lastOperation = std::max(getLastMachineBlock(utils::MACHINE1, utils::OPERATION).value(),getLastMachineBlock(utils::MACHINE1, utils::OPERATION).value(),compareEndTime);
+        auto lastM1operation = getLastMachineBlock(utils::MACHINE1, utils::OPERATION);
+        auto lastM1operationValue = lastM1operation.value();
+        auto lastM2operation = getLastMachineBlock(utils::MACHINE2, utils::OPERATION);
+        auto lastM2operationValue = lastM2operation.value();
+        auto lastOperation = std::max(lastM1operationValue, lastM2operationValue, compareEndTime);
         return lastOperation->end;
     }
 
     std::optional<MachineBlock*> getLastMachineBlock(const utils::MachineNumber &machine, const utils::BlockType &block)
     {
+        //TODO TABU: i fucking hate cpp, fix this shit
         auto it = std::find_if(machineMap[machine]->rbegin(), machineMap[machine]->rend(), [&](MachineBlock &x){ return x.blockType == block;});
         if (it != machineMap[machine]->rend())
             return std::optional<MachineBlock*>(&(*it));
         else
             return std::nullopt;
     }
+};
+
+struct SwapListEntry
+{
+    unsigned int cMax = 0;
+    Solution solution;
+    std::pair<MachineBlock, MachineBlock> swap;
 };
 
 bool operator== (std::pair<MachineBlock, MachineBlock>& x, std::pair<MachineBlock, MachineBlock>& y)
@@ -314,6 +344,8 @@ public:
     {
         std::list<MachineBlock> blocks = this->createRandomOrder();
         currentSolution.randomSolution(blocks);
+        //TODO TABU: CHANGE THAT!
+        bestSolution = currentSolution;
         return *this;
     }
 
@@ -360,19 +392,42 @@ public:
         return list;
     }
 
-    void optimize()
+    void optimizeLocaly()
     {
-        std::list<MachineBlock> blocks = getBlocksOrder(currentSolution);
-        auto swapList = generateCandidatesForSwap(blocks);
-        for (auto &&pair : swapList)
+        std::list<std::pair<MachineBlock, MachineBlock>> tabuList;
+        do
         {
-            auto swappedOrder = swap(pair, blocks);
-            Solution solution;
-            solution.orderedSolution(swappedOrder);
-        }
-        
+            std::list<MachineBlock> blocks = getBlocksOrder(currentSolution);
+            auto swapList = generateCandidatesForSwap(blocks);
+            std::vector<SwapListEntry> localSearch;
+            for (auto &&pair : swapList)
+            {
+                auto swappedOrder = swap(pair, blocks);
+                Solution solution;
+                solution.orderedSolution(swappedOrder);
+                SwapListEntry entry;
+                entry.cMax = solution.getCmax();
+                entry.solution = solution;
+                entry.swap = pair;
+                localSearch.push_back(entry);
+            }
+            std::sort(localSearch.begin(), localSearch.end(), [](SwapListEntry &x, SwapListEntry &y){return x.cMax < y.cMax;});
+            //remove solution if swap in tabu AND cMax is greater than in best solution
+            localSearch.erase(std::remove_if(localSearch.begin(), localSearch.end(), 
+                                    [&](SwapListEntry &swapListEntry) {return std::find(tabuList.begin(), tabuList.end(), swapListEntry.swap) != tabuList.end();}));
 
-        
+            // localSearch.erase(std::remove_if(localSearch.begin(), localSearch.end(), 
+            //                         [&](SwapListEntry &swapListEntry) {return std::find(tabuList.begin(), tabuList.end(),
+            //                             [&](std::pair<MachineBlock, MachineBlock> &swapInTabu) {return swapInTabu == swapListEntry.swap && swapListEntry.cMax > bestSolution.getCmax();}) 
+            //                     != tabuList.end();}));
+
+            SwapListEntry bestEntry = localSearch.front();
+            tabuList.push_back(bestEntry.swap);
+            currentSolution = bestEntry.solution;
+            if(currentSolution.getCmax() < bestSolution.getCmax()) bestSolution = currentSolution;
+            if(tabuList.size() > utils::settings->tabuListSize) tabuList.pop_front();
+            std::cout << "Best: " << bestSolution.getCmax() << " Current: " << currentSolution.getCmax() << std::endl;
+        } while (true);
     }
 
 };
@@ -400,7 +455,7 @@ int main(int argc, char const *argv[])
     utils::settings = &settings;
     TabuSearch algorithm(settings);
     algorithm.createInitialSolution();
-    algorithm.optimize();
+    algorithm.optimizeLocaly();
 
     return 0;
 }

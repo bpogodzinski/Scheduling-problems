@@ -43,7 +43,7 @@
   },
   "maintenanceLength":6,
   "maintenancePeriod": 20,
-  "neighbourSearchCount":10,
+  "neighbourSearchCount":40,
   "algorithmRetries":3,
   "operationRenewPunishmentFactor":0.2
 }

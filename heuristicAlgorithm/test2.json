@@ -204,6 +204,6 @@
   "maintenanceLength": 8,
   "maintenancePeriod": 30,
   "neighbourSearchCount":50,
-  "algorithmRetries":10,
+  "algorithmRetries":3,
   "operationRenewPunishmentFactor":0.2
 }

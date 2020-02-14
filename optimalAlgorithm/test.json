@@ -1,0 +1,29 @@
+{
+  "tasks": {
+    "1": {
+      "1": 8,
+      "2": 3
+    },
+    "2": {
+      "1": 3,
+      "2": 7
+    },
+    "3": {
+      "1": 5,
+      "2": 5
+    },
+    "4": {
+      "1": 9,
+      "2": 2
+    },
+    "5": {
+      "1": 8,
+      "2": 8
+    }
+  },
+  "maintenanceLength":6,
+  "maintenancePeriod": 20,
+  "neighbourSearchCount":20,
+  "algorithmRetries":3,
+  "operationRenewPunishmentFactor":0.2
+}
